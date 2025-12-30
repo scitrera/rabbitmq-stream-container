@@ -36,6 +36,8 @@ jobs:
           set -euo pipefail
 
           UPSTREAM_TAG="rabbitmq:4-management"
+
+          # Pull upstream (optional: force amd64 for deterministic RepoDigests)
           docker pull "${UPSTREAM_TAG}"
 
           # RepoDigest looks like: rabbitmq@sha256:...
@@ -44,36 +46,34 @@ jobs:
           echo "repo_digest=${REPO_DIGEST}" >> "$GITHUB_OUTPUT"
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
-          # OCI version label usually matches RabbitMQ version (e.g. 4.2.2)
-          VERSION="$(docker inspect --format='{{ index .Config.Labels "org.opencontainers.image.version" }}' "${UPSTREAM_TAG}" || true)"
+          # Prefer RABBITMQ_VERSION from image env; fallback to rabbitmq-diagnostics
+          VERSION="$(
+            docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${UPSTREAM_TAG}" \
+              | sed -n 's/^RABBITMQ_VERSION=//p' \
+              | head -n1
+          )"
           if [[ -z "${VERSION}" || "${VERSION}" == "<no value>" ]]; then
-            # fallback: ask rabbitmq itself (slower, but robust)
             VERSION="$(docker run --rm "${UPSTREAM_TAG}" rabbitmq-diagnostics -q version | tr -d '\r')"
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "RabbitMQ version: ${VERSION}"
 
-          # Export upstream labels as repeated --label args
+          # Export upstream labels as repeated --label args, one arg per line so bash can read safely
           python - <<'PY' > /tmp/label_args.txt
-          import json, subprocess, shlex
-          
-          img = "rabbitmq:4-management"
-          insp = subprocess.check_output(["docker","inspect",img], text=True)
-          data = json.loads(insp)[0]
-          
-          labels = data.get("Config", {}).get("Labels", {}) or {}
-          
-          args = []
-          for k, v in labels.items():
-              args.append("--label")
-              args.append(f"{k}={v}")
-          
-          # Add your own provenance label
-          args.append("--label")
-          args.append("io.botwinick.derived=true")
-          
-          print(" ".join(shlex.quote(a) for a in args))
-          PY
+          import json, subprocess
 
+          img = "rabbitmq:4-management"
+          data = json.loads(subprocess.check_output(["docker", "inspect", img], text=True))[0]
+          labels = data.get("Config", {}).get("Labels", {}) or {}
+
+          for k, v in labels.items():
+              print("--label")
+              print(f"{k}={v}")
+
+          # Add your own base provenance label
+          print("--label")
+          print("io.scitrera.derived=true")
+          PY
 
           echo "label_args_file=/tmp/label_args.txt" >> "$GITHUB_OUTPUT"
           echo "Upstream repo digest: ${REPO_DIGEST}"
@@ -107,14 +107,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          UPSTREAM_TAG="rabbitmq:4-management"
+          REPO_DIGEST="${{ steps.upstream.outputs.repo_digest }}"
+
           OWNER="${{ github.repository_owner }}"
-          IMAGE="ghcr.io/${OWNER}/rabbitmq-streams"
+          IMAGE="ghcr.io/${OWNER}/rabbitmq-stream"
 
           VERSION="${{ steps.upstream.outputs.version }}"
           MAJOR="${VERSION%%.*}"                 # 4
           MINOR="${VERSION%.*}"                  # 4.2
 
-          # Our tag set:
           TAGS=(
             "${MAJOR}-management"
             "${MINOR}-management"
@@ -122,16 +124,18 @@ jobs:
           )
 
           # Base pinned to exact upstream digest to guarantee reproducibility
-          BASE_IMAGE="rabbitmq@${{ steps.upstream.outputs.digest }}"
+          BASE_IMAGE="docker.io/library/rabbitmq@${{ steps.upstream.outputs.digest }}"
 
-          # Build tag args
           TAG_ARGS=()
           for t in "${TAGS[@]}"; do
             TAG_ARGS+=( -t "${IMAGE}:${t}" )
           done
 
           # Labels: copy upstream labels + add ours
-          LABEL_ARGS=( $(cat "${{ steps.upstream.outputs.label_args_file }}") )
+          mapfile -t LABEL_ARGS < "${{ steps.upstream.outputs.label_args_file }}"
+          LABEL_ARGS+=( --label "io.scitrera.upstream.tag=${UPSTREAM_TAG}" )
+          LABEL_ARGS+=( --label "io.scitrera.rabbitmq.version=${VERSION}" )
+          LABEL_ARGS+=( --label "io.scitrera.upstream.digest=${REPO_DIGEST}" )
 
           docker buildx build \
             --push \
