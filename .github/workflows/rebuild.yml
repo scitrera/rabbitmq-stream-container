@@ -53,21 +53,27 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
           # Export upstream labels as repeated --label args
-          python - <<'PY'
+          python - <<'PY' > /tmp/label_args.txt
           import json, subprocess, shlex
+          
           img = "rabbitmq:4-management"
           insp = subprocess.check_output(["docker","inspect",img], text=True)
           data = json.loads(insp)[0]
+          
           labels = data.get("Config", {}).get("Labels", {}) or {}
-          # Convert to: --label k=v --label k2=v2 ...
+          
           args = []
           for k, v in labels.items():
-            args.append("--label")
-            args.append(f"{k}={v}")
-          # Add our own provenance label
-          args.append("--label"); args.append("io.botwinick.derived=true")
+              args.append("--label")
+              args.append(f"{k}={v}")
+          
+          # Add your own provenance label
+          args.append("--label")
+          args.append("io.botwinick.derived=true")
+          
           print(" ".join(shlex.quote(a) for a in args))
-          PY > /tmp/label_args.txt
+          PY
+
 
           echo "label_args_file=/tmp/label_args.txt" >> "$GITHUB_OUTPUT"
           echo "Upstream repo digest: ${REPO_DIGEST}"
