@@ -2,7 +2,7 @@ name: Rebuild derived RabbitMQ when upstream changes
 
 on:
   schedule:
-    - cron: "0 * * * *" # hourly
+    - cron: "0 0 * * *" # daily
   workflow_dispatch:
 
 jobs:
