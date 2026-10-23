@@ -29,7 +29,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull upstream and compute digest + labels + version
+      - name: Pull upstream and compute digest + version
         id: upstream
         shell: bash
         run: |
@@ -58,24 +58,6 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "RabbitMQ version: ${VERSION}"
 
-          # Export upstream labels as repeated --label args, one arg per line so bash can read safely
-          python - <<'PY' > /tmp/label_args.txt
-          import json, subprocess
-
-          img = "rabbitmq:4-management"
-          data = json.loads(subprocess.check_output(["docker", "inspect", img], text=True))[0]
-          labels = data.get("Config", {}).get("Labels", {}) or {}
-
-          for k, v in labels.items():
-              print("--label")
-              print(f"{k}={v}")
-
-          # Add your own base provenance label
-          print("--label")
-          print("io.scitrera.derived=true")
-          PY
-
-          echo "label_args_file=/tmp/label_args.txt" >> "$GITHUB_OUTPUT"
           echo "Upstream repo digest: ${REPO_DIGEST}"
           echo "Upstream version: ${VERSION}"
 
@@ -131,11 +113,13 @@ jobs:
             TAG_ARGS+=( -t "${IMAGE}:${t}" )
           done
 
-          # Labels: copy upstream labels + add ours
-          mapfile -t LABEL_ARGS < "${{ steps.upstream.outputs.label_args_file }}"
-          LABEL_ARGS+=( --label "io.scitrera.upstream.tag=${UPSTREAM_TAG}" )
-          LABEL_ARGS+=( --label "io.scitrera.rabbitmq.version=${VERSION}" )
-          LABEL_ARGS+=( --label "io.scitrera.upstream.digest=${REPO_DIGEST}" )
+          # Base-image labels are inherited automatically.
+          LABEL_ARGS=(
+            --label "io.scitrera.derived=true"
+            --label "io.scitrera.upstream.tag=${UPSTREAM_TAG}"
+            --label "io.scitrera.rabbitmq.version=${VERSION}"
+            --label "io.scitrera.upstream.digest=${REPO_DIGEST}"
+          )
 
           docker buildx build \
             --push \
